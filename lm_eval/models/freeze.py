@@ -18,8 +18,8 @@ class FreezeLM(LM):
     def __init__(
         self,
         ckpt_path: str,
-        model_cfg: Optional[dict],
-        wandb_id: Optional[str],
+        model_cfg: Optional[dict] = None,
+        wandb_id: Optional[str] = None,
         encoding: str = "gpt2",
         device: str = "cuda",
     ) -> None:
