@@ -58,7 +58,7 @@ class FreezeLM(LM):
         res = []
 
         for request in tqdm(requests, disable=disable_tqdm):
-            prompt, gen_kwargs = request
+            prompt, gen_kwargs = request.args
             stop = gen_kwargs.get("until", None)
             max_gen_toks = gen_kwargs.get("max_gen_toks", 256)
             temperature = gen_kwargs.get("temperature", 1.0)
@@ -105,7 +105,7 @@ class FreezeLM(LM):
         res = []
 
         for request in tqdm(requests, disable=disable_tqdm):
-            prompt, response = request
+            prompt, response = request.args
             res.append(self._loglikelihood(prompt, response))
 
         return res
@@ -114,7 +114,7 @@ class FreezeLM(LM):
         res = []
 
         for request in tqdm(requests, disable=disable_tqdm):
-            response, *_ = request
+            response, *_ = request.args
             prompt = "<|endoftext|>"
             ll, is_greedy = self._loglikelihood(prompt, response)
             res.append((ll,))
