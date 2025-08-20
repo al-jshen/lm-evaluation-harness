@@ -1,4 +1,3 @@
-import random
 from functools import lru_cache
 from typing import Optional
 
@@ -6,7 +5,7 @@ import hydra
 import tiktoken
 import torch
 from dfs.utils.logging import get_wandb_run
-from freeze.models.generate import generate
+from freeze.models.generate import generate, logits_to_probs
 from tqdm import tqdm
 
 from lm_eval.api.model import LM
@@ -37,8 +36,8 @@ class FreezeLM(LM):
         self.model.eval()
         self.tokenizer = tiktoken.get_encoding(encoding)
 
-    def _tokenize(self, prompt):
-        toks = self.tokenizer.encode_ordinary(prompt)
+    def _tokenize(self, prompt, **kwargs):
+        toks = self.tokenizer.encode(prompt, **kwargs)
         toks = torch.tensor(toks, dtype=torch.long, device=self.device)
         return toks.unsqueeze(0)
 
@@ -77,18 +76,41 @@ class FreezeLM(LM):
 
         return res
 
+    def _loglikelihood(self, prompt, response):
+        prompt_tok = self._tokenize(
+            prompt, allowed_special=self.tokenizer.special_tokens_set
+        )
+        response_tok = self._tokenize(
+            response, allowed_special=self.tokenizer.special_tokens_set
+        )
+        joint_tok = torch.cat((prompt_tok, response_tok), dim=1)
+        logits = self.model(joint_tok[:, :-1])[0]
+        logits_response = logits[-response_tok.shape[1] :]
+
+        probs_response = logits_to_probs(logits_response)
+        probs_response = torch.gather(probs_response, 1, response_tok)[0]
+
+        most_likely = torch.argmax(logits_response, dim=-1)
+        is_most_likely = torch.equal(most_likely, response_tok[0])
+
+        return (probs_response.sum().item(), int(is_most_likely))
+
     def loglikelihood(self, requests, disable_tqdm: bool = False):
         res = []
 
-        for _ in tqdm(requests, disable=disable_tqdm):
-            res.append((-random.random(), False))
+        for request in tqdm(requests, disable=disable_tqdm):
+            prompt, response = request
+            res.append(self._loglikelihood(prompt, response))
 
         return res
 
     def loglikelihood_rolling(self, requests, disable_tqdm: bool = False):
         res = []
 
-        for _ in tqdm(requests, disable=disable_tqdm):
-            res.append(-random.random())
+        for request in tqdm(requests, disable=disable_tqdm):
+            response, *_ = request
+            prompt = "<|endoftext|>"
+            ll, is_greedy = self._loglikelihood(prompt, response)
+            res.append((ll,))
 
         return res
