@@ -106,6 +106,8 @@ class FreezeLM(LM):
 
         for request in tqdm(requests, disable=disable_tqdm):
             prompt, response = request.args
+            print("PROMPT ======================== ", prompt)
+            print("RESPONSE ====================== ", response)
             res.append(self._loglikelihood(prompt, response))
 
         return res
