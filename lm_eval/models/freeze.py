@@ -31,7 +31,7 @@ class FreezeLM(LM):
 
         ckpt = torch.load(ckpt_path, weights_only=False, mmap=True)
         model = hydra.utils.instantiate(model_cfg)
-        model.load_state_dict(ckpt["model"], strict=False)
+        model.load_state_dict(ckpt["model_opt"]["model"], strict=False)
         self.device = device
         self.model = model.to(self.device)
         self.model.eval()
