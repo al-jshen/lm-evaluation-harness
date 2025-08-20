@@ -10,6 +10,7 @@ from tqdm import tqdm
 
 from lm_eval.api.model import LM
 from lm_eval.api.registry import register_model
+from lm_eval.utils import simple_parse_args_string
 
 
 @register_model("freeze")
@@ -35,6 +36,11 @@ class FreezeLM(LM):
         self.model = model.to(self.device)
         self.model.eval()
         self.tokenizer = tiktoken.get_encoding(encoding)
+
+    @classmethod
+    def create_from_arg_string(cls, arg_string, additional_config=None):
+        args = simple_parse_args_string(arg_string)
+        return cls(**args)
 
     def _tokenize(self, prompt, **kwargs):
         toks = self.tokenizer.encode(prompt, **kwargs)
