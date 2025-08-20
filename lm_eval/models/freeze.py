@@ -54,6 +54,15 @@ class FreezeLM(LM):
     def _get_stop_toks(self, stop):
         return self._flatten(self.tokenizer.encode_batch(stop))
 
+    @property
+    def max_length(self) -> int:
+        # NOTE: Turn on truncation to avoid errors on long inputs.
+        return 2048
+
+    @property
+    def max_gen_toks(self) -> int:
+        return 512
+
     def generate_until(self, requests, disable_tqdm: bool = False):
         res = []
 
@@ -106,8 +115,6 @@ class FreezeLM(LM):
 
         for request in tqdm(requests, disable=disable_tqdm):
             prompt, response = request.args
-            print("PROMPT ======================== ", prompt)
-            print("RESPONSE ====================== ", response)
             res.append(self._loglikelihood(prompt, response))
 
         return res
