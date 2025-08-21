@@ -2,6 +2,7 @@ from functools import lru_cache
 from typing import Optional
 
 import hydra
+import numpy as np
 import tiktoken
 import torch
 from dfs.utils.logging import get_wandb_run
@@ -49,6 +50,15 @@ class FreezeLM(LM):
         toks = torch.tensor(toks, dtype=torch.long, device=self.device)
         return toks.unsqueeze(0)
 
+    def _tokenize_batch(self, prompt, **kwargs) -> tuple[list[list[int]], np.ndarray]:
+        toks = self.tokenizer.encode_batch(prompt, **kwargs)
+        seq_lens = np.array([len(tok) for tok in toks])
+        # toks = torch.nested.nested_tensor(
+        #     toks, dtype=torch.long, layout=torch.jagged, device=self.device
+        # )
+        # toks = toks.to_padded_tensor(padding=0)
+        return toks, seq_lens
+
     def _flatten(self, x):
         return [i for sublist in x for i in sublist]
 
@@ -94,61 +104,43 @@ class FreezeLM(LM):
         return res
 
     def _loglikelihood(self, requests):
-        prompts = [req[0] for req in requests]
-        responses = [req[1] for req in requests]
+        prompts, responses = zip(*[(req[0], req[1]) for req in requests])
 
-        # Tokenize all prompts and responses
-        prompt_toks = [
-            self._tokenize(prompt, allowed_special=self.tokenizer.special_tokens_set)
-            for prompt in prompts
-        ]
-        response_toks = [
-            self._tokenize(response, allowed_special=self.tokenizer.special_tokens_set)
-            for response in responses
-        ]
+        prompt_toks, prompt_lens = self._tokenize_batch(
+            prompts, allowed_special=self.tokenizer.special_tokens_set
+        )
+        response_toks, response_lens = self._tokenize_batch(
+            responses, allowed_special=self.tokenizer.special_tokens_set
+        )
 
         # Create joint tokens for each request
         joint_toks = [
-            torch.cat((prompt_tok, response_tok), dim=1)
+            torch.tensor(prompt_tok + response_tok).to(self.device, dtype=torch.long)
             for prompt_tok, response_tok in zip(prompt_toks, response_toks)
         ]
 
-        # Pad sequences to same length for batching
-        max_len = max(joint_tok.shape[1] for joint_tok in joint_toks)
-        batch_size = len(joint_toks)
-
-        padded_joint = torch.zeros(
-            batch_size, max_len, dtype=torch.long, device=self.device
+        joint_toks = torch.nested.nested_tensor(
+            joint_toks, dtype=torch.long, layout=torch.jagged, device=self.device
         )
-        attention_mask = torch.zeros(
-            batch_size, max_len, dtype=torch.bool, device=self.device
-        )
-
-        for i, joint_tok in enumerate(joint_toks):
-            seq_len = joint_tok.shape[1]
-            padded_joint[i, :seq_len] = joint_tok[0]
-            attention_mask[i, :seq_len] = True
+        joint_toks = joint_toks.to_padded_tensor(padding=0)
 
         # Get logits for the batch
         with torch.no_grad():
             logits = self.model(
-                padded_joint[:, :-1]
+                joint_toks[:, :-1]
             )  # Shape: (batch_size, seq_len-1, vocab_size)
 
         results = []
         for i, (response_tok, joint_tok) in enumerate(zip(response_toks, joint_toks)):
-            response_len = response_tok.shape[1]
-            seq_len = joint_tok.shape[1] - 1  # -1 because we passed [:,:-1] to model
-
+            prompt_len = prompt_lens[i]
+            response_len = response_lens[i]
             # Extract logits corresponding to response tokens
-            logits_response = logits[i, seq_len - response_len : seq_len]
-
+            logits_response = logits[i, prompt_len - 1 : prompt_len - 1 + response_len]
             probs_response = logits_to_probs(logits_response)
-            probs_response = torch.gather(probs_response, 1, response_tok.T)
-
-            most_likely = torch.argmax(logits_response, dim=-1)
-            is_most_likely = torch.equal(most_likely, response_tok[0])
-
+            # Gather probabilities of the actual response tokens
+            probs_response = probs_response[torch.arange(response_len), response_tok]
+            most_likely = torch.argmax(logits_response, dim=-1).tolist()
+            is_most_likely = most_likely == response_tok
             results.append((probs_response.sum().item(), int(is_most_likely)))
 
         return results
