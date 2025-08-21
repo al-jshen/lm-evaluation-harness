@@ -22,6 +22,7 @@ class FreezeLM(LM):
         wandb_id: Optional[str] = None,
         encoding: str = "gpt2",
         device: str = "cuda",
+        chunk_size: int = 8,
     ) -> None:
         super().__init__()
         self.ckpt_path = ckpt_path
@@ -36,6 +37,7 @@ class FreezeLM(LM):
         self.model = model.to(self.device)
         self.model.eval()
         self.tokenizer = tiktoken.get_encoding(encoding)
+        self.chunk_size = chunk_size
 
     @classmethod
     def create_from_arg_string(cls, arg_string, additional_config=None):
@@ -155,9 +157,8 @@ class FreezeLM(LM):
         res = []
 
         # Process requests in chunks of size 8
-        chunk_size = 8
-        for i in range(0, len(requests), chunk_size):
-            chunk = requests[i : i + chunk_size]
+        for i in tqdm(range(0, len(requests), self.chunk_size), disable=disable_tqdm):
+            chunk = requests[i : i + self.chunk_size]
             # Extract prompt, response pairs from the chunk
             chunk_args = [request.args for request in chunk]
             chunk_results = self._loglikelihood(chunk_args)
@@ -169,9 +170,8 @@ class FreezeLM(LM):
         res = []
 
         # Process requests in chunks of size 8
-        chunk_size = 8
-        for i in range(0, len(requests), chunk_size):
-            chunk = requests[i : i + chunk_size]
+        for i in tqdm(range(0, len(requests), self.chunk_size), disable=disable_tqdm):
+            chunk = requests[i : i + self.chunk_size]
             # Extract prompt, response pairs from the chunk
             chunk_args = []
             for request in chunk:
