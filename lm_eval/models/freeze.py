@@ -105,7 +105,10 @@ class FreezeLM(LM):
         return res
 
     def _loglikelihood(self, requests):
-        prompts, responses = zip(*[(req[0], req[1]) for req in requests])
+        prompts, responses = zip(*requests)
+
+        print("prompts:", prompts)
+        print("responses:", responses)
 
         prompt_toks, prompt_lens = self._tokenize_batch(
             prompts, allowed_special=self.tokenizer.special_tokens_set
