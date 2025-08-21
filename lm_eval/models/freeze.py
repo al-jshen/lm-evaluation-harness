@@ -24,6 +24,7 @@ class FreezeLM(LM):
         encoding: str = "gpt2",
         device: str = "cuda",
         chunk_size: int = 8,
+        **kwargs,
     ) -> None:
         super().__init__()
         self.ckpt_path = ckpt_path
