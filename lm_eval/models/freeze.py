@@ -91,41 +91,96 @@ class FreezeLM(LM):
 
         return res
 
-    def _loglikelihood(self, prompt, response):
-        prompt_tok = self._tokenize(
-            prompt, allowed_special=self.tokenizer.special_tokens_set
+    def _loglikelihood(self, requests):
+        prompts = [req[0] for req in requests]
+        responses = [req[1] for req in requests]
+
+        # Tokenize all prompts and responses
+        prompt_toks = [
+            self._tokenize(prompt, allowed_special=self.tokenizer.special_tokens_set)
+            for prompt in prompts
+        ]
+        response_toks = [
+            self._tokenize(response, allowed_special=self.tokenizer.special_tokens_set)
+            for response in responses
+        ]
+
+        # Create joint tokens for each request
+        joint_toks = [
+            torch.cat((prompt_tok, response_tok), dim=1)
+            for prompt_tok, response_tok in zip(prompt_toks, response_toks)
+        ]
+
+        # Pad sequences to same length for batching
+        max_len = max(joint_tok.shape[1] for joint_tok in joint_toks)
+        batch_size = len(joint_toks)
+
+        padded_joint = torch.zeros(
+            batch_size, max_len, dtype=torch.long, device=self.device
         )
-        response_tok = self._tokenize(
-            response, allowed_special=self.tokenizer.special_tokens_set
+        attention_mask = torch.zeros(
+            batch_size, max_len, dtype=torch.bool, device=self.device
         )
-        joint_tok = torch.cat((prompt_tok, response_tok), dim=1)
-        logits = self.model(joint_tok[:, :-1])[0]
-        logits_response = logits[-response_tok.shape[1] :]
 
-        probs_response = logits_to_probs(logits_response)
-        probs_response = torch.gather(probs_response, 1, response_tok)[0]
+        for i, joint_tok in enumerate(joint_toks):
+            seq_len = joint_tok.shape[1]
+            padded_joint[i, :seq_len] = joint_tok[0]
+            attention_mask[i, :seq_len] = True
 
-        most_likely = torch.argmax(logits_response, dim=-1)
-        is_most_likely = torch.equal(most_likely, response_tok[0])
+        # Get logits for the batch
+        with torch.no_grad():
+            logits = self.model(
+                padded_joint[:, :-1]
+            )  # Shape: (batch_size, seq_len-1, vocab_size)
 
-        return (probs_response.sum().item(), int(is_most_likely))
+        results = []
+        for i, (response_tok, joint_tok) in enumerate(zip(response_toks, joint_toks)):
+            response_len = response_tok.shape[1]
+            seq_len = joint_tok.shape[1] - 1  # -1 because we passed [:,:-1] to model
+
+            # Extract logits corresponding to response tokens
+            logits_response = logits[i, seq_len - response_len : seq_len]
+
+            probs_response = logits_to_probs(logits_response)
+            probs_response = torch.gather(probs_response, 1, response_tok.T)
+
+            most_likely = torch.argmax(logits_response, dim=-1)
+            is_most_likely = torch.equal(most_likely, response_tok[0])
+
+            results.append((probs_response.sum().item(), int(is_most_likely)))
+
+        return results
 
     def loglikelihood(self, requests, disable_tqdm: bool = False):
         res = []
 
-        for request in tqdm(requests, disable=disable_tqdm):
-            prompt, response = request.args
-            res.append(self._loglikelihood(prompt, response))
+        # Process requests in chunks of size 8
+        chunk_size = 8
+        for i in range(0, len(requests), chunk_size):
+            chunk = requests[i : i + chunk_size]
+            # Extract prompt, response pairs from the chunk
+            chunk_args = [request.args for request in chunk]
+            chunk_results = self._loglikelihood(chunk_args)
+            res.extend(chunk_results)
 
         return res
 
     def loglikelihood_rolling(self, requests, disable_tqdm: bool = False):
         res = []
 
-        for request in tqdm(requests, disable=disable_tqdm):
-            response, *_ = request.args
-            prompt = "<|endoftext|>"
-            ll, is_greedy = self._loglikelihood(prompt, response)
-            res.append((ll,))
+        # Process requests in chunks of size 8
+        chunk_size = 8
+        for i in range(0, len(requests), chunk_size):
+            chunk = requests[i : i + chunk_size]
+            # Extract prompt, response pairs from the chunk
+            chunk_args = []
+            for request in chunk:
+                response, *_ = request.args
+                prompt = "<|endoftext|>"
+                chunk_args.append((prompt, response))
+
+            chunk_results = self._loglikelihood(chunk_args)
+            for ll, _ in chunk_results:
+                res.append((ll,))
 
         return res
