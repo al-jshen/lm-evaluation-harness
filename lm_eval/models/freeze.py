@@ -109,9 +109,6 @@ class FreezeLM(LM):
     def _loglikelihood(self, requests):
         prompts, responses = zip(*requests)
 
-        print("prompts:", prompts)
-        print("responses:", responses)
-
         prompt_toks, prompt_lens = self._tokenize_batch(
             prompts, allowed_special=self.tokenizer.special_tokens_set
         )
@@ -226,12 +223,13 @@ class FreezeLM(LM):
     def loglikelihood_rolling(self, requests, disable_tqdm: bool = False):
         res = []
 
-        # Process requests in chunks of size 8
         for i in tqdm(range(0, len(requests), self.chunk_size), disable=disable_tqdm):
             chunk = requests[i : i + self.chunk_size]
+            chunk_args = [request.args[0] for request in chunk] # extract strings
             chunk_results = self._likelihood_sliding_window_batch(
-                chunk, stride=self.stride
+                chunk_args, stride=self.stride
             )
-            res.extend(chunk_results.tolist())
+            results = [(i.item(),) for i in chunk_results]
+            res.extend(results)
 
         return res
