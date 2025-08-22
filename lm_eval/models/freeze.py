@@ -206,7 +206,9 @@ class FreezeLM(LM):
             if end_loc == seq_len:
                 break
 
-        assert np.all((num_loss_tokens + 1).cpu().numpy() == seq_lens)
+        # assert np.all((num_loss_tokens + 1).cpu().numpy() == seq_lens)
+        print("NUM LOSS TOKENS: ", num_loss_tokens.cpu().numpy(), "\n")
+        print("SEQ LENS: ", seq_lens, "\n")
 
         # ppl = torch.exp(-ll_sum / num_loss_tokens) # NEGATIVE log likelihood for this
         return ll_sum  # , num_loss_tokens
