@@ -188,10 +188,10 @@ class FreezeLM(LM):
             with torch.no_grad():
                 logits = self.model(input_ids[:, :-1])  # just the last token
                 neg_log_likelihood = F.cross_entropy(
-                    logits.reshape(-1, logits.reshape(-1)),
+                    logits.reshape(-1, logits.shape[-1]),
                     target_ids[:, 1:].reshape(-1),
                     reduction="none",
-                ).reshape(logits.size(0), -1)
+                ).reshape(logits.shape[0], -1)
 
             likelihood_float_mask = (target_ids[:, 1:] != -100).float()
 
