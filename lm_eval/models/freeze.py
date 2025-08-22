@@ -235,7 +235,8 @@ class FreezeLM(LM):
             chunk_results = self._likelihood_sliding_window_batch(
                 chunk_args, stride=self.stride
             )
-            results = [(i.item(),) for i in chunk_results]
+            # results = [(i.item(),) for i in chunk_results]
+            results = chunk_results.cpu().tolist()
             res.extend(results)
 
         return res
