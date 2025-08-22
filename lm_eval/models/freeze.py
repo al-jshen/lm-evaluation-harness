@@ -24,7 +24,7 @@ class FreezeLM(LM):
         wandb_id: Optional[str] = None,
         encoding: str = "gpt2",
         device: str = "cuda",
-        chunk_size: int = 8,
+        batch_size: int = 8,
         stride: int = 64,
         **kwargs,
     ) -> None:
@@ -41,7 +41,7 @@ class FreezeLM(LM):
         self.model = model.to(self.device)
         self.model.eval()
         self.tokenizer = tiktoken.get_encoding(encoding)
-        self.chunk_size = chunk_size
+        self._batch_size = batch_size
         self.stride = stride
 
     @classmethod
@@ -77,6 +77,10 @@ class FreezeLM(LM):
     @property
     def max_gen_toks(self) -> int:
         return 512
+
+    @property
+    def batch_size(self) -> int:
+        return self._batch_size
 
     def generate_until(self, requests, disable_tqdm: bool = False):
         res = []
@@ -211,8 +215,8 @@ class FreezeLM(LM):
         res = []
 
         # Process requests in chunks of size 8
-        for i in tqdm(range(0, len(requests), self.chunk_size), disable=disable_tqdm):
-            chunk = requests[i : i + self.chunk_size]
+        for i in tqdm(range(0, len(requests), self.batch_size), disable=disable_tqdm):
+            chunk = requests[i : i + self.batch_size]
             # Extract prompt, response pairs from the chunk
             chunk_args = [request.args for request in chunk]
             chunk_results = self._loglikelihood(chunk_args)
@@ -223,9 +227,9 @@ class FreezeLM(LM):
     def loglikelihood_rolling(self, requests, disable_tqdm: bool = False):
         res = []
 
-        for i in tqdm(range(0, len(requests), self.chunk_size), disable=disable_tqdm):
-            chunk = requests[i : i + self.chunk_size]
-            chunk_args = [request.args[0] for request in chunk] # extract strings
+        for i in tqdm(range(0, len(requests), self.batch_size), disable=disable_tqdm):
+            chunk = requests[i : i + self.batch_size]
+            chunk_args = [request.args[0] for request in chunk]  # extract strings
             chunk_results = self._likelihood_sliding_window_batch(
                 chunk_args, stride=self.stride
             )
