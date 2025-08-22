@@ -5,6 +5,7 @@ import hydra
 import numpy as np
 import tiktoken
 import torch
+import torch.nn.functional as F
 from dfs.utils.logging import get_wandb_run
 from freeze.models.generate import generate, logits_to_probs
 from tqdm import tqdm
@@ -24,6 +25,7 @@ class FreezeLM(LM):
         encoding: str = "gpt2",
         device: str = "cuda",
         chunk_size: int = 8,
+        stride: int = 64,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -40,6 +42,7 @@ class FreezeLM(LM):
         self.model.eval()
         self.tokenizer = tiktoken.get_encoding(encoding)
         self.chunk_size = chunk_size
+        self.stride = stride
 
     @classmethod
     def create_from_arg_string(cls, arg_string, additional_config=None):
@@ -69,8 +72,7 @@ class FreezeLM(LM):
 
     @property
     def max_length(self) -> int:
-        # NOTE: Turn on truncation to avoid errors on long inputs.
-        return 2048
+        return 4096
 
     @property
     def max_gen_toks(self) -> int:
@@ -146,6 +148,65 @@ class FreezeLM(LM):
 
         return results
 
+    def _likelihood_sliding_window_batch(self, texts, stride: int = 512):
+        encodings, seq_lens = self._tokenize_batch(
+            texts, allowed_special=self.tokenizer.special_tokens_set
+        )
+        encodings = torch.nested.nested_tensor(
+            encodings, dtype=torch.long, layout=torch.jagged, device=self.device
+        )
+        encodings = encodings.to_padded_tensor(padding=0)
+        # prepend with eot token
+        eot_pad = torch.full(
+            (encodings.shape[0], 1), self.tokenizer.eot_token, device=self.device
+        )
+        encodings = torch.cat([eot_pad, encodings], dim=1)
+        seq_len = encodings.shape[1]
+
+        ll_sum = torch.zeros(
+            encodings.shape[0], device=self.device
+        )  # sum of negative log-likelihoods for each sequence
+        num_loss_tokens = torch.zeros(
+            encodings.shape[0], device=self.device, dtype=torch.long
+        )  # number of tokens for which loss is computed
+        # num_loss_tokens = seq_len - 1
+
+        prev_end_loc = 0
+        for begin_loc in range(0, seq_len, stride):
+            end_loc = min(begin_loc + self.max_length, seq_len)
+            trg_len = (
+                end_loc - prev_end_loc
+            )  # may be different from stride on last loop
+            input_ids = encodings[:, begin_loc:end_loc].to(self.device)
+            target_ids = input_ids.clone()
+            target_ids[:, :-trg_len] = -100
+
+            with torch.no_grad():
+                logits = self.model(input_ids[:, :-1])  # just the last token
+                neg_log_likelihood = F.cross_entropy(
+                    logits.view(-1, logits.size(-1)),
+                    target_ids[:, 1:].view(-1),
+                    reduction="none",
+                ).view(logits.size(0), -1)
+
+            likelihood_float_mask = (target_ids[:, 1:] != -100).float()
+
+            neg_log_likelihood = (
+                neg_log_likelihood * likelihood_float_mask
+            )  # b x (seq_len - 1)
+
+            ll_sum -= neg_log_likelihood.sum(dim=1)
+            num_loss_tokens += likelihood_float_mask.sum(dim=1).to(torch.long)
+
+            prev_end_loc = end_loc
+            if end_loc == seq_len:
+                break
+
+        assert (num_loss_tokens + 1).tolist() == seq_lens
+
+        # ppl = torch.exp(-ll_sum / num_loss_tokens) # NEGATIVE log likelihood for this
+        return ll_sum  # , num_loss_tokens
+
     def loglikelihood(self, requests, disable_tqdm: bool = False):
         res = []
 
@@ -165,15 +226,9 @@ class FreezeLM(LM):
         # Process requests in chunks of size 8
         for i in tqdm(range(0, len(requests), self.chunk_size), disable=disable_tqdm):
             chunk = requests[i : i + self.chunk_size]
-            # Extract prompt, response pairs from the chunk
-            chunk_args = []
-            for request in chunk:
-                response, *_ = request.args
-                prompt = "<|endoftext|>"
-                chunk_args.append((prompt, response))
-
-            chunk_results = self._loglikelihood(chunk_args)
-            for ll, _ in chunk_results:
-                res.append((ll,))
+            chunk_results = self._likelihood_sliding_window_batch(
+                chunk, stride=self.stride
+            )
+            res.extend(chunk_results.tolist())
 
         return res
